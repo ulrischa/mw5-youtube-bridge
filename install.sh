@@ -32,7 +32,7 @@ yt_url_default="rtmps://a.rtmps.youtube.com/live2"
 fps_default="30"
 vbitrate_default="3000k"
 abitrate_default="128k"
-days_default="Mon Tue Wed Thu Fri Sat Sun"
+days_num_default="1 2 3 4 5 6 7"
 start_default="08:00"
 stop_default="18:00"
 offline_text_default="Camera sleeping (solar) - last frame"
@@ -88,8 +88,15 @@ if ! [[ "${enabled}" =~ ^[01]$ ]]; then
   exit 1
 fi
 
-read -r -p "Active days (Mon Tue Wed Thu Fri Sat Sun) [${days_default}]: " days
-days="${days:-${days_default}}"
+echo "Active days as numbers (1=Mon ... 7=Sun). Example: '1 2 3 4 5' for Mon-Fri."
+read -r -p "DAYS_NUM [${days_num_default}]: " days_num
+days_num="${days_num:-${days_num_default}}"
+for d in ${days_num}; do
+  if ! [[ "${d}" =~ ^[1-7]$ ]]; then
+    echo "ERROR: DAYS_NUM must contain only numbers 1..7 (space-separated)."
+    exit 1
+  fi
+done
 
 read -r -p "Start time (HH:MM) [${start_default}]: " start_time
 start_time="${start_time:-${start_default}}"
@@ -165,7 +172,7 @@ echo "Writing ${CONFIG_FILE} and ${SCHEDULE_FILE} ..."
 
 {
   printf 'ENABLED=%q\n' "${enabled}"
-  printf 'DAYS=%q\n' "${days}"
+  printf 'DAYS_NUM=%q\n' "${days_num}"
   printf 'START_TIME=%q\n' "${start_time}"
   printf 'STOP_TIME=%q\n' "${stop_time}"
 } > "${SCHEDULE_FILE}"

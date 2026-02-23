@@ -59,8 +59,17 @@ source "${SCHEDULE_FILE}"
 valid_time() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 valid_enabled() { [[ "${ENABLED}" == "0" || "${ENABLED}" == "1" ]]; }
 
-valid_days() {
-  [[ -n "${DAYS}" ]] || return 1
+valid_days_num() {
+  [[ -n "${DAYS_NUM:-}" ]] || return 1
+  for d in ${DAYS_NUM}; do
+    [[ "${d}" =~ ^[1-7]$ ]] || return 1
+  done
+  return 0
+}
+
+# Legacy fallback: DAYS="Mon Tue ..." (will be mapped to numbers).
+valid_days_legacy() {
+  [[ -n "${DAYS:-}" ]] || return 1
   local allowed="Mon Tue Wed Thu Fri Sat Sun"
   for d in ${DAYS}; do
     case " ${allowed} " in
@@ -76,41 +85,47 @@ validate_all() {
     log_err "Invalid ENABLED: '${ENABLED}' (must be 0 or 1)"
     return 1
   fi
+
   if [[ "${ENABLED}" == "0" ]]; then
     return 0
   fi
-  if ! valid_days; then
-    log_err "Invalid DAYS: '${DAYS}' (use Mon Tue Wed Thu Fri Sat Sun)"
-    return 1
-  fi
+
   if ! valid_time "${START_TIME}" || ! valid_time "${STOP_TIME}"; then
     log_err "Invalid time format START_TIME='${START_TIME}' STOP_TIME='${STOP_TIME}' (HH:MM)"
     return 1
   fi
+
+  # Accept either DAYS_NUM or legacy DAYS (mapped to numbers).
+  if ! valid_days_num; then
+    if ! valid_days_legacy; then
+      log_err "Invalid days: provide DAYS_NUM='1 2 3 ...' (1=Mon..7=Sun) or DAYS='Mon Tue ...'"
+      return 1
+    fi
+  fi
+
   if [[ "${YT_URL}" != rtmp*://* ]]; then
     log_err "Invalid YT_URL: must start with rtmp:// or rtmps://"
     return 1
   fi
+
   if ! [[ "${FPS}" =~ ^[0-9]+$ && "${GOP}" =~ ^[0-9]+$ ]]; then
     log_err "FPS/GOP must be integers"
     return 1
   fi
+
   if (( GOP > FPS * 4 )); then
     log_err "GOP too large (keyframes would exceed 4 seconds)"
     return 1
   fi
-  if [[ ! -x "$(command -v "${FFMPEG_BIN}")" ]]; then
-    log_err "FFMPEG_BIN not found: ${FFMPEG_BIN}"
+
+  if [[ -z "${FFMPEG_BIN:-}" || -z "${FFPROBE_BIN:-}" || -z "${TIMEOUT_BIN:-}" ]]; then
+    log_err "FFMPEG_BIN/FFPROBE_BIN/TIMEOUT_BIN missing in config.env"
     return 1
   fi
-  if [[ ! -x "$(command -v "${FFPROBE_BIN}")" ]]; then
-    log_err "FFPROBE_BIN not found: ${FFPROBE_BIN}"
-    return 1
-  fi
-  if [[ ! -x "$(command -v "${TIMEOUT_BIN}")" ]]; then
-    log_err "TIMEOUT_BIN not found: ${TIMEOUT_BIN}"
-    return 1
-  fi
+  command -v "${FFMPEG_BIN}" >/dev/null 2>&1 || { log_err "FFMPEG_BIN not found: ${FFMPEG_BIN}"; return 1; }
+  command -v "${FFPROBE_BIN}" >/dev/null 2>&1 || { log_err "FFPROBE_BIN not found: ${FFPROBE_BIN}"; return 1; }
+  command -v "${TIMEOUT_BIN}" >/dev/null 2>&1 || { log_err "TIMEOUT_BIN not found: ${TIMEOUT_BIN}"; return 1; }
+
   return 0
 }
 
@@ -122,13 +137,40 @@ time_to_minutes() {
   echo $((10#${h} * 60 + 10#${m}))
 }
 
-today_abbr() { LC_TIME=C date +%a; }
-yesterday_abbr() { LC_TIME=C date -d "yesterday" +%a; }
+today_daynum() { date +%u; }                 # 1..7 (Mon..Sun), locale-independent
+yesterday_daynum() { date -d "yesterday" +%u; }
 
-is_day_listed() {
-  local day="$1"
+# Build allowed day numbers list:
+# - prefer DAYS_NUM
+# - else map legacy DAYS tokens to numbers (locale-independent)
+allowed_days_num_list() {
+  if [[ -n "${DAYS_NUM:-}" ]]; then
+    echo "${DAYS_NUM}"
+    return 0
+  fi
+
+  local out=()
   for d in ${DAYS}; do
-    [[ "${d}" == "${day}" ]] && return 0
+    case "${d}" in
+      Mon) out+=("1") ;;
+      Tue) out+=("2") ;;
+      Wed) out+=("3") ;;
+      Thu) out+=("4") ;;
+      Fri) out+=("5") ;;
+      Sat) out+=("6") ;;
+      Sun) out+=("7") ;;
+      *) : ;;
+    esac
+  done
+  echo "${out[*]:-}"
+}
+
+is_day_allowed_num() {
+  local want="$1" # 1..7
+  local list
+  list="$(allowed_days_num_list)"
+  for d in ${list}; do
+    [[ "${d}" == "${want}" ]] && return 0
   done
   return 1
 }
@@ -145,31 +187,94 @@ should_stream_now() {
 
   # 24h window
   if (( start == stop )); then
-    is_day_listed "$(today_abbr)"
+    is_day_allowed_num "$(today_daynum)"
     return
   fi
 
   if (( start < stop )); then
-    is_day_listed "$(today_abbr)" || return 1
+    is_day_allowed_num "$(today_daynum)" || return 1
     (( now >= start && now < stop ))
     return
   fi
 
-  # Cross-midnight:
+  # Cross-midnight window:
+  # - start..23:59 uses today's day
+  # - 00:00..stop uses yesterday's day
   if (( now >= start )); then
-    is_day_listed "$(today_abbr)" || return 1
+    is_day_allowed_num "$(today_daynum)" || return 1
     return 0
   fi
+
   if (( now < stop )); then
-    is_day_listed "$(yesterday_abbr)" || return 1
+    is_day_allowed_num "$(yesterday_daynum)" || return 1
     return 0
   fi
+
   return 1
 }
 
-current_mode() {
-  if [[ -f "${MODE_FILE}" ]]; then
-    cat "${MODE_FILE}" 2>/dev/null || true
+# --- process detection (robust restarts) ---
+pid_uid_matches() {
+  local pid="$1"
+  [[ -r "/proc/${pid}/status" ]] || return 1
+  local uid
+  uid="$(awk '/^Uid:/{print $2}' "/proc/${pid}/status" 2>/dev/null || true)"
+  [[ -n "${uid}" ]] && [[ "${uid}" == "$(id -u)" ]]
+}
+
+is_pid_ours() {
+  local pid="$1"
+  pid_uid_matches "${pid}" || return 1
+  [[ -r "/proc/${pid}/cmdline" ]] || return 1
+  local cmd
+  cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+  [[ "${cmd}" == *"ffmpeg"* && "${cmd}" == *"-f flv"* && "${cmd}" == *"rtmp"* ]] || return 1
+  [[ "${cmd}" == *"stream=1"* || "${cmd}" == *"/state/last.jpg"* || "${cmd}" == *"color=c=black"* ]]
+}
+
+ffmpeg_running() {
+  [[ -f "${PID_FILE}" ]] || return 1
+  local pid
+  pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+  [[ -n "${pid}" ]] || return 1
+  kill -0 "${pid}" 2>/dev/null && is_pid_ours "${pid}"
+}
+
+detect_running_mode() {
+  [[ -f "${PID_FILE}" ]] || { echo ""; return 0; }
+  local pid
+  pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
+  [[ -n "${pid}" ]] || { echo ""; return 0; }
+
+  if ! (kill -0 "${pid}" 2>/dev/null && is_pid_ours "${pid}"); then
+    echo ""
+    return 0
+  fi
+
+  local cmd
+  cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+  if [[ "${cmd}" == *"stream=1"* ]]; then
+    echo "rtsp"
+  else
+    echo "offline"
+  fi
+}
+
+sync_offline_text() {
+  local desired="${OFFLINE_TEXT:-}"
+  if [[ -z "${desired}" ]]; then
+    desired="Camera offline - last frame"
+  fi
+
+  if [[ ! -f "${TEXT_FILE}" ]]; then
+    printf '%s\n' "${desired}" > "${TEXT_FILE}"
+    return 0
+  fi
+
+  local current
+  current="$(head -n 1 "${TEXT_FILE}" 2>/dev/null || true)"
+  if [[ "${current}" != "${desired}" ]]; then
+    printf '%s\n' "${desired}" > "${TEXT_FILE}"
   fi
 }
 
@@ -195,24 +300,6 @@ camera_online() {
   return 1
 }
 
-sync_offline_text() {
-  local desired="${OFFLINE_TEXT}"
-  if [[ -z "${desired}" ]]; then
-    desired="Camera offline - last frame"
-  fi
-
-  if [[ ! -f "${TEXT_FILE}" ]]; then
-    printf '%s\n' "${desired}" > "${TEXT_FILE}"
-    return 0
-  fi
-
-  local current
-  current="$(head -n 1 "${TEXT_FILE}" 2>/dev/null || true)"
-  if [[ "${current}" != "${desired}" ]]; then
-    printf '%s\n' "${desired}" > "${TEXT_FILE}"
-  fi
-}
-
 refresh_snapshot_if_needed() {
   local last="${STATE_DIR}/last.jpg"
   local interval="${SNAPSHOT_INTERVAL_SEC}"
@@ -235,10 +322,10 @@ refresh_snapshot_if_needed() {
 switch_to() {
   local mode="$1"
   local running_mode
-  running_mode="$(current_mode)"
+  running_mode="$(detect_running_mode)"
 
-  if [[ "${running_mode}" == "${mode}" ]]; then
-    # start.sh is idempotent, but no need to call it constantly
+  if [[ -n "${running_mode}" && "${running_mode}" == "${mode}" ]]; then
+    echo "${mode}" > "${MODE_FILE}" 2>/dev/null || true
     return 0
   fi
 
@@ -246,7 +333,6 @@ switch_to() {
   "${BASE_DIR}/start.sh" "${mode}" || log_err "Failed to start mode=${mode}"
 }
 
-# ---------- Main ----------
 main() {
   if ! validate_all; then
     log_warn "Validation failed; stopping for safety"
@@ -257,9 +343,11 @@ main() {
   sync_offline_text
 
   if ! should_stream_now; then
-    if [[ -f "${PID_FILE}" ]]; then
+    if ffmpeg_running; then
       log_info "Outside schedule; stopping"
       "${BASE_DIR}/stop.sh" || log_err "Failed to stop"
+    else
+      log_info "Outside schedule; stopping"
     fi
     exit 0
   fi

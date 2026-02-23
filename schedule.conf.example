@@ -1,8 +1,11 @@
 # 1 = enabled, 0 = disabled
 ENABLED="1"
 
-# Allowed days (English short names). Scripts are locale-safe (LC_TIME=C).
-DAYS="Mon Tue Wed Thu Fri Sat Sun"
+# Allowed days as numbers (locale-independent): 1=Mon ... 7=Sun
+# Examples:
+#   Mon-Fri: "1 2 3 4 5"
+#   Daily:   "1 2 3 4 5 6 7"
+DAYS_NUM="1 2 3 4 5 6 7"
 
 # Time window (24h HH:MM)
 START_TIME="08:00"
