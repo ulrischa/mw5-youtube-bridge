@@ -24,8 +24,14 @@ Scheduling is enforced by cron (every minute):
 - logs/, run/, state/ are owned by mw5stream.
 
 ## Install (interactive)
-1) Put this folder at /opt/mw5-youtube-bridge (recommended)
-2) Check correct rights
+1) Put this folder at /opt/mw5-youtube-bridge
+OR:
+sudo apt update
+sudo apt install -y git
+sudo git clone https://github.com/ulrischa/mw5-youtube-bridge
+cd /opt/mw5-youtube-bridge
+sudo ./install.sh
+2) set rights (chmod +x ./*.sh)
 3) Run:
    sudo /opt/mw5-youtube-bridge/install.sh
 
