@@ -1,0 +1,12 @@
+# 1 = enabled, 0 = disabled
+ENABLED="1"
+
+# Allowed days (English short names). Scripts are locale-safe (LC_TIME=C).
+DAYS="Mon Tue Wed Thu Fri Sat Sun"
+
+# Time window (24h HH:MM)
+START_TIME="08:00"
+STOP_TIME="18:00"
+
+# If START_TIME > STOP_TIME, the window crosses midnight (e.g. 20:00 -> 06:00).
+# After midnight, the day check uses "yesterday" to match the intended schedule.
