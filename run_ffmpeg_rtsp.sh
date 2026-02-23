@@ -9,6 +9,20 @@ source "${CONFIG_FILE}"
 RTSP_URL="rtsp://${CAM_IP}:554/stream=1"
 OUT_URL="${YT_URL}/${YT_KEY}"
 
+if [[ "${VIDEO_ENCODER}" == "copy" ]]; then
+  exec "${FFMPEG_BIN}" \
+    -nostdin \
+    -rtsp_transport tcp \
+    -stimeout "${STIMEOUT_US}" \
+    -i "${RTSP_URL}" \
+    -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=44100" \
+    -map 0:v:0 -map 1:a:0 \
+    -c:v copy \
+    -c:a aac -b:a "${ABITRATE}" -ar 44100 -ac 2 \
+    -f flv "${OUT_URL}"
+fi
+
+# fallback: re-encode (existing behavior)
 video_args=()
 x264_extra=()
 
