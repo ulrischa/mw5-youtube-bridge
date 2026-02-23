@@ -99,7 +99,6 @@ validate_all() {
   fi
 
   command -v "${FFMPEG_BIN}" >/dev/null 2>&1 || { log_err "FFMPEG_BIN not found: ${FFMPEG_BIN}"; return 1; }
-  command -v "${FFPROBE_BIN}" >/dev/null 2>&1 || { log_err "FFPROBE_BIN not found: ${FFPROBE_BIN}"; return 1; }
   command -v "${TIMEOUT_BIN}" >/dev/null 2>&1 || { log_err "TIMEOUT_BIN not found: ${TIMEOUT_BIN}"; return 1; }
 
   return 0
@@ -195,8 +194,7 @@ detect_running_mode() {
   fi
 }
 
-# Write a single textfile used by offline drawtext.
-# If OFFLINE_SHOW_TIME=1, the second line is updated each manager run (once per minute).
+# Write a single textfile used by offline drawtext (1 or 2 lines).
 sync_offline_textfile() {
   local line1="${OFFLINE_TEXT:-}"
   [[ -n "${line1}" ]] || line1="Camera offline - last frame"
@@ -208,7 +206,6 @@ sync_offline_textfile() {
     return 0
   fi
 
-  # No timestamp: only rewrite if changed
   if [[ ! -f "${TEXT_FILE}" ]]; then
     printf '%s\n' "${line1}" > "${TEXT_FILE}"
     return 0
@@ -221,21 +218,23 @@ sync_offline_textfile() {
   fi
 }
 
+# IMPORTANT: Use the same method that worked for you: FFmpeg reads 1 frame via TCP.
 camera_online() {
   local rtsp_url="rtsp://${CAM_IP}:554/stream=1"
-  local timeout_s="${PROBE_TIMEOUT_SEC}"
-  local retries="${PROBE_RETRIES}"
-  local delay_s="${PROBE_DELAY_SEC}"
+  local timeout_s="${PROBE_TIMEOUT_SEC:-5}"
+  local retries="${PROBE_RETRIES:-3}"
+  local delay_s="${PROBE_DELAY_SEC:-2}"
+  local st_us="${PROBE_STIMEOUT_US:-5000000}"
 
   for _ in $(seq 1 "${retries}"); do
-    if "${TIMEOUT_BIN}" "${timeout_s}" "${FFPROBE_BIN}" \
-      -v error \
+    if "${TIMEOUT_BIN}" "${timeout_s}" "${FFMPEG_BIN}" \
+      -nostdin \
       -rtsp_transport tcp \
-      -stimeout "${PROBE_STIMEOUT_US}" \
-      -select_streams v:0 \
-      -show_entries stream=codec_name \
-      -of default=nw=1:nk=1 \
-      "${rtsp_url}" >/dev/null 2>&1; then
+      -stimeout "${st_us}" \
+      -i "${rtsp_url}" \
+      -analyzeduration 0 -probesize 32 \
+      -frames:v 1 \
+      -f null - >/dev/null 2>&1; then
       return 0
     fi
     sleep "${delay_s}"
@@ -245,7 +244,7 @@ camera_online() {
 
 refresh_snapshot_if_needed() {
   local last="${STATE_DIR}/last.jpg"
-  local interval="${SNAPSHOT_INTERVAL_SEC}"
+  local interval="${SNAPSHOT_INTERVAL_SEC:-300}"
 
   if [[ ! -s "${last}" ]]; then
     "${BASE_DIR}/snapshot.sh" && log_info "Snapshot captured (initial)" || log_warn "Snapshot capture failed"
@@ -286,19 +285,24 @@ main() {
   sync_offline_textfile
 
   if ! should_stream_now; then
-    if [[ -f "${PID_FILE}" ]]; then
-      log_info "Outside schedule; stopping"
-      "${BASE_DIR}/stop.sh" || log_err "Failed to stop"
-    else
-      log_info "Outside schedule; stopping"
-    fi
+    log_info "Outside schedule; stopping"
+    "${BASE_DIR}/stop.sh" || true
     exit 0
   fi
 
+  local running_mode
+  running_mode="$(detect_running_mode)"
+
   if camera_online; then
+    if [[ "${running_mode}" != "rtsp" ]]; then
+      log_info "RTSP probe OK; switching to rtsp"
+    fi
     refresh_snapshot_if_needed
     switch_to "rtsp"
   else
+    if [[ "${running_mode}" != "offline" ]]; then
+      log_info "RTSP probe failed; switching to offline"
+    fi
     switch_to "offline"
   fi
 }
