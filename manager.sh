@@ -40,10 +40,9 @@ if ! flock -n 9; then
   exit 0
 fi
 
-for f in "${CONFIG_FILE}" "${SCHEDULE_FILE}" "${BASE_DIR}/start.sh" "${BASE_DIR}/stop.sh" "${BASE_DIR}/snapshot.sh"; do
+for f in "${CONFIG_FILE}" "${SCHEDULE_FILE}" "${BASE_DIR}/start.sh" "${BASE_DIR}/snapshot.sh"; do
   if [[ ! -r "${f}" ]]; then
     log_err "Required file missing or not readable: ${f}"
-    "${BASE_DIR}/stop.sh" || true
     exit 0
   fi
 done
@@ -70,6 +69,7 @@ validate_all() {
     return 1
   fi
 
+  # If disabled, we will always show offline view (no error).
   if [[ "${ENABLED}" == "0" ]]; then
     return 0
   fi
@@ -81,20 +81,6 @@ validate_all() {
 
   if ! valid_time "${START_TIME}" || ! valid_time "${STOP_TIME}"; then
     log_err "Invalid time format START_TIME='${START_TIME}' STOP_TIME='${STOP_TIME}' (HH:MM)"
-    return 1
-  fi
-
-  if [[ "${YT_URL}" != rtmp*://* ]]; then
-    log_err "Invalid YT_URL: must start with rtmp:// or rtmps://"
-    return 1
-  fi
-
-  if ! [[ "${FPS}" =~ ^[0-9]+$ && "${GOP}" =~ ^[0-9]+$ ]]; then
-    log_err "FPS/GOP must be integers"
-    return 1
-  fi
-  if (( GOP > FPS * 4 )); then
-    log_err "GOP too large (keyframes would exceed 4 seconds)"
     return 1
   fi
 
@@ -122,7 +108,8 @@ is_day_allowed_num() {
   return 1
 }
 
-should_stream_now() {
+# Returns 0 if we are "inside schedule" (meaning we prefer rtsp), else 1.
+inside_schedule_now() {
   if [[ "${ENABLED}" != "1" ]]; then
     return 1
   fi
@@ -194,7 +181,7 @@ detect_running_mode() {
   fi
 }
 
-# Write a single textfile used by offline drawtext (1 or 2 lines).
+# One textfile for offline drawtext (1 or 2 lines).
 sync_offline_textfile() {
   local line1="${OFFLINE_TEXT:-}"
   [[ -n "${line1}" ]] || line1="Camera offline - last frame"
@@ -218,7 +205,8 @@ sync_offline_textfile() {
   fi
 }
 
-# IMPORTANT: Use the same method that worked for you: FFmpeg reads 1 frame via TCP.
+# Robust RTSP availability check (same method that worked for you):
+# FFmpeg must be able to read one video frame via TCP within timeout.
 camera_online() {
   local rtsp_url="rtsp://${CAM_IP}:554/stream=1"
   local timeout_s="${PROBE_TIMEOUT_SEC:-5}"
@@ -277,32 +265,26 @@ switch_to() {
 
 main() {
   if ! validate_all; then
-    log_warn "Validation failed; stopping for safety"
-    "${BASE_DIR}/stop.sh" || true
+    log_warn "Validation failed; forcing offline view for safety"
+    sync_offline_textfile
+    switch_to "offline"
     exit 0
   fi
 
   sync_offline_textfile
 
-  if ! should_stream_now; then
-    log_info "Outside schedule; stopping"
-    "${BASE_DIR}/stop.sh" || true
+  # Simplified behavior:
+  # - outside schedule => offline view
+  # - inside schedule  => rtsp (fallback to offline if camera currently not reachable)
+  if ! inside_schedule_now; then
+    switch_to "offline"
     exit 0
   fi
 
-  local running_mode
-  running_mode="$(detect_running_mode)"
-
   if camera_online; then
-    if [[ "${running_mode}" != "rtsp" ]]; then
-      log_info "RTSP probe OK; switching to rtsp"
-    fi
     refresh_snapshot_if_needed
     switch_to "rtsp"
   else
-    if [[ "${running_mode}" != "offline" ]]; then
-      log_info "RTSP probe failed; switching to offline"
-    fi
     switch_to "offline"
   fi
 }
