@@ -63,13 +63,13 @@ valid_days_num() {
   return 0
 }
 
-validate_all() {
+validate_schedule() {
   if ! valid_enabled; then
     log_err "Invalid ENABLED: '${ENABLED}' (must be 0 or 1)"
     return 1
   fi
 
-  # If disabled, we will always show offline view (no error).
+  # If disabled => always offline view (no error)
   if [[ "${ENABLED}" == "0" ]]; then
     return 0
   fi
@@ -83,9 +83,6 @@ validate_all() {
     log_err "Invalid time format START_TIME='${START_TIME}' STOP_TIME='${STOP_TIME}' (HH:MM)"
     return 1
   fi
-
-  command -v "${FFMPEG_BIN}" >/dev/null 2>&1 || { log_err "FFMPEG_BIN not found: ${FFMPEG_BIN}"; return 1; }
-  command -v "${TIMEOUT_BIN}" >/dev/null 2>&1 || { log_err "TIMEOUT_BIN not found: ${TIMEOUT_BIN}"; return 1; }
 
   return 0
 }
@@ -108,7 +105,6 @@ is_day_allowed_num() {
   return 1
 }
 
-# Returns 0 if we are "inside schedule" (meaning we prefer rtsp), else 1.
 inside_schedule_now() {
   if [[ "${ENABLED}" != "1" ]]; then
     return 1
@@ -205,37 +201,13 @@ sync_offline_textfile() {
   fi
 }
 
-# Robust RTSP availability check (same method that worked for you):
-# FFmpeg must be able to read one video frame via TCP within timeout.
-camera_online() {
-  local rtsp_url="rtsp://${CAM_IP}:554/stream=1"
-  local timeout_s="${PROBE_TIMEOUT_SEC:-5}"
-  local retries="${PROBE_RETRIES:-3}"
-  local delay_s="${PROBE_DELAY_SEC:-2}"
-  local st_us="${PROBE_STIMEOUT_US:-5000000}"
-
-  for _ in $(seq 1 "${retries}"); do
-    if "${TIMEOUT_BIN}" "${timeout_s}" "${FFMPEG_BIN}" \
-      -nostdin \
-      -rtsp_transport tcp \
-      -stimeout "${st_us}" \
-      -i "${rtsp_url}" \
-      -analyzeduration 0 -probesize 32 \
-      -frames:v 1 \
-      -f null - >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep "${delay_s}"
-  done
-  return 1
-}
-
+# Best-effort snapshot refresh while in schedule (keeps last.jpg reasonably fresh for offline mode).
 refresh_snapshot_if_needed() {
   local last="${STATE_DIR}/last.jpg"
   local interval="${SNAPSHOT_INTERVAL_SEC:-300}"
 
   if [[ ! -s "${last}" ]]; then
-    "${BASE_DIR}/snapshot.sh" && log_info "Snapshot captured (initial)" || log_warn "Snapshot capture failed"
+    "${BASE_DIR}/snapshot.sh" >/dev/null 2>&1 && log_info "Snapshot captured (initial)" || log_warn "Snapshot capture failed"
     return
   fi
 
@@ -245,7 +217,7 @@ refresh_snapshot_if_needed() {
   age=$(( now - mtime ))
 
   if (( age >= interval )); then
-    "${BASE_DIR}/snapshot.sh" && log_info "Snapshot refreshed" || log_warn "Snapshot refresh failed"
+    "${BASE_DIR}/snapshot.sh" >/dev/null 2>&1 && log_info "Snapshot refreshed" || log_warn "Snapshot refresh failed"
   fi
 }
 
@@ -264,8 +236,8 @@ switch_to() {
 }
 
 main() {
-  if ! validate_all; then
-    log_warn "Validation failed; forcing offline view for safety"
+  # If schedule is invalid, force offline view (safe & simple).
+  if ! validate_schedule; then
     sync_offline_textfile
     switch_to "offline"
     exit 0
@@ -274,14 +246,9 @@ main() {
   sync_offline_textfile
 
   # Simplified behavior:
-  # - outside schedule => offline view
-  # - inside schedule  => rtsp (fallback to offline if camera currently not reachable)
-  if ! inside_schedule_now; then
-    switch_to "offline"
-    exit 0
-  fi
-
-  if camera_online; then
+  # - outside schedule => offline
+  # - inside schedule  => rtsp
+  if inside_schedule_now; then
     refresh_snapshot_if_needed
     switch_to "rtsp"
   else
