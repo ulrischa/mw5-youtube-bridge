@@ -40,7 +40,6 @@ if ! flock -n 9; then
   exit 0
 fi
 
-# Required files readable?
 for f in "${CONFIG_FILE}" "${SCHEDULE_FILE}" "${BASE_DIR}/start.sh" "${BASE_DIR}/stop.sh" "${BASE_DIR}/snapshot.sh"; do
   if [[ ! -r "${f}" ]]; then
     log_err "Required file missing or not readable: ${f}"
@@ -49,13 +48,11 @@ for f in "${CONFIG_FILE}" "${SCHEDULE_FILE}" "${BASE_DIR}/start.sh" "${BASE_DIR}
   fi
 done
 
-# Load config + schedule
 # shellcheck source=/dev/null
 source "${CONFIG_FILE}"
 # shellcheck source=/dev/null
 source "${SCHEDULE_FILE}"
 
-# -------- Validation (safe default: do not stream) --------
 valid_time() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 valid_enabled() { [[ "${ENABLED}" == "0" || "${ENABLED}" == "1" ]]; }
 
@@ -63,19 +60,6 @@ valid_days_num() {
   [[ -n "${DAYS_NUM:-}" ]] || return 1
   for d in ${DAYS_NUM}; do
     [[ "${d}" =~ ^[1-7]$ ]] || return 1
-  done
-  return 0
-}
-
-# Legacy fallback: DAYS="Mon Tue ..." (will be mapped to numbers).
-valid_days_legacy() {
-  [[ -n "${DAYS:-}" ]] || return 1
-  local allowed="Mon Tue Wed Thu Fri Sat Sun"
-  for d in ${DAYS}; do
-    case " ${allowed} " in
-      *" ${d} "*) : ;;
-      *) return 1 ;;
-    esac
   done
   return 0
 }
@@ -90,17 +74,14 @@ validate_all() {
     return 0
   fi
 
-  if ! valid_time "${START_TIME}" || ! valid_time "${STOP_TIME}"; then
-    log_err "Invalid time format START_TIME='${START_TIME}' STOP_TIME='${STOP_TIME}' (HH:MM)"
+  if ! valid_days_num; then
+    log_err "Invalid DAYS_NUM: provide numbers 1..7 (1=Mon..7=Sun), e.g. '1 2 3 4 5'"
     return 1
   fi
 
-  # Accept either DAYS_NUM or legacy DAYS (mapped to numbers).
-  if ! valid_days_num; then
-    if ! valid_days_legacy; then
-      log_err "Invalid days: provide DAYS_NUM='1 2 3 ...' (1=Mon..7=Sun) or DAYS='Mon Tue ...'"
-      return 1
-    fi
+  if ! valid_time "${START_TIME}" || ! valid_time "${STOP_TIME}"; then
+    log_err "Invalid time format START_TIME='${START_TIME}' STOP_TIME='${STOP_TIME}' (HH:MM)"
+    return 1
   fi
 
   if [[ "${YT_URL}" != rtmp*://* ]]; then
@@ -112,16 +93,11 @@ validate_all() {
     log_err "FPS/GOP must be integers"
     return 1
   fi
-
   if (( GOP > FPS * 4 )); then
     log_err "GOP too large (keyframes would exceed 4 seconds)"
     return 1
   fi
 
-  if [[ -z "${FFMPEG_BIN:-}" || -z "${FFPROBE_BIN:-}" || -z "${TIMEOUT_BIN:-}" ]]; then
-    log_err "FFMPEG_BIN/FFPROBE_BIN/TIMEOUT_BIN missing in config.env"
-    return 1
-  fi
   command -v "${FFMPEG_BIN}" >/dev/null 2>&1 || { log_err "FFMPEG_BIN not found: ${FFMPEG_BIN}"; return 1; }
   command -v "${FFPROBE_BIN}" >/dev/null 2>&1 || { log_err "FFPROBE_BIN not found: ${FFPROBE_BIN}"; return 1; }
   command -v "${TIMEOUT_BIN}" >/dev/null 2>&1 || { log_err "TIMEOUT_BIN not found: ${TIMEOUT_BIN}"; return 1; }
@@ -129,7 +105,6 @@ validate_all() {
   return 0
 }
 
-# ---------- Helpers ----------
 time_to_minutes() {
   local t="$1"
   local h="${t%:*}"
@@ -137,39 +112,12 @@ time_to_minutes() {
   echo $((10#${h} * 60 + 10#${m}))
 }
 
-today_daynum() { date +%u; }                 # 1..7 (Mon..Sun), locale-independent
+today_daynum() { date +%u; }                 # 1..7
 yesterday_daynum() { date -d "yesterday" +%u; }
 
-# Build allowed day numbers list:
-# - prefer DAYS_NUM
-# - else map legacy DAYS tokens to numbers (locale-independent)
-allowed_days_num_list() {
-  if [[ -n "${DAYS_NUM:-}" ]]; then
-    echo "${DAYS_NUM}"
-    return 0
-  fi
-
-  local out=()
-  for d in ${DAYS}; do
-    case "${d}" in
-      Mon) out+=("1") ;;
-      Tue) out+=("2") ;;
-      Wed) out+=("3") ;;
-      Thu) out+=("4") ;;
-      Fri) out+=("5") ;;
-      Sat) out+=("6") ;;
-      Sun) out+=("7") ;;
-      *) : ;;
-    esac
-  done
-  echo "${out[*]:-}"
-}
-
 is_day_allowed_num() {
-  local want="$1" # 1..7
-  local list
-  list="$(allowed_days_num_list)"
-  for d in ${list}; do
+  local want="$1"
+  for d in ${DAYS_NUM}; do
     [[ "${d}" == "${want}" ]] && return 0
   done
   return 1
@@ -197,23 +145,18 @@ should_stream_now() {
     return
   fi
 
-  # Cross-midnight window:
-  # - start..23:59 uses today's day
-  # - 00:00..stop uses yesterday's day
+  # Cross-midnight:
   if (( now >= start )); then
     is_day_allowed_num "$(today_daynum)" || return 1
     return 0
   fi
-
   if (( now < stop )); then
     is_day_allowed_num "$(yesterday_daynum)" || return 1
     return 0
   fi
-
   return 1
 }
 
-# --- process detection (robust restarts) ---
 pid_uid_matches() {
   local pid="$1"
   [[ -r "/proc/${pid}/status" ]] || return 1
@@ -230,14 +173,6 @@ is_pid_ours() {
   cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
   [[ "${cmd}" == *"ffmpeg"* && "${cmd}" == *"-f flv"* && "${cmd}" == *"rtmp"* ]] || return 1
   [[ "${cmd}" == *"stream=1"* || "${cmd}" == *"/state/last.jpg"* || "${cmd}" == *"color=c=black"* ]]
-}
-
-ffmpeg_running() {
-  [[ -f "${PID_FILE}" ]] || return 1
-  local pid
-  pid="$(cat "${PID_FILE}" 2>/dev/null || true)"
-  [[ -n "${pid}" ]] || return 1
-  kill -0 "${pid}" 2>/dev/null && is_pid_ours "${pid}"
 }
 
 detect_running_mode() {
@@ -260,21 +195,29 @@ detect_running_mode() {
   fi
 }
 
-sync_offline_text() {
-  local desired="${OFFLINE_TEXT:-}"
-  if [[ -z "${desired}" ]]; then
-    desired="Camera offline - last frame"
+# Write a single textfile used by offline drawtext.
+# If OFFLINE_SHOW_TIME=1, the second line is updated each manager run (once per minute).
+sync_offline_textfile() {
+  local line1="${OFFLINE_TEXT:-}"
+  [[ -n "${line1}" ]] || line1="Camera offline - last frame"
+
+  if [[ "${OFFLINE_SHOW_TIME:-0}" == "1" ]]; then
+    local line2
+    line2="$(date +"%Y-%m-%d %H:%M:%S")"
+    printf '%s\n%s\n' "${line1}" "${line2}" > "${TEXT_FILE}"
+    return 0
   fi
 
+  # No timestamp: only rewrite if changed
   if [[ ! -f "${TEXT_FILE}" ]]; then
-    printf '%s\n' "${desired}" > "${TEXT_FILE}"
+    printf '%s\n' "${line1}" > "${TEXT_FILE}"
     return 0
   fi
 
   local current
   current="$(head -n 1 "${TEXT_FILE}" 2>/dev/null || true)"
-  if [[ "${current}" != "${desired}" ]]; then
-    printf '%s\n' "${desired}" > "${TEXT_FILE}"
+  if [[ "${current}" != "${line1}" ]]; then
+    printf '%s\n' "${line1}" > "${TEXT_FILE}"
   fi
 }
 
@@ -340,10 +283,10 @@ main() {
     exit 0
   fi
 
-  sync_offline_text
+  sync_offline_textfile
 
   if ! should_stream_now; then
-    if ffmpeg_running; then
+    if [[ -f "${PID_FILE}" ]]; then
       log_info "Outside schedule; stopping"
       "${BASE_DIR}/stop.sh" || log_err "Failed to stop"
     else

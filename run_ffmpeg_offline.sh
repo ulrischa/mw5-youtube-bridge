@@ -20,26 +20,19 @@ text_color="${OFFLINE_TEXT_COLOR}"
 text_size="${OFFLINE_TEXT_SIZE}"
 font_file="${FONT_FILE}"
 
-# Bottom-left placement
-text_y="h-${margin}-${text_size}*2"
-time_y="h-${margin}-${text_size}"
+# Place block near bottom-left. Assume up to 2 lines in the file.
+text_y="h-${margin}-${text_size}*3"
 
 vf_common="scale=${OUT_WIDTH}:${OUT_HEIGHT}:force_original_aspect_ratio=decrease,\
 pad=${OUT_WIDTH}:${OUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,\
 format=yuv420p"
 
+# Single drawtext using textfile only (multiline supported via newline in the file).
 vf_text="drawtext=fontfile=${font_file}:textfile=${TEXT_FILE}:reload=1:\
 x=${margin}:y=${text_y}:fontsize=${text_size}:fontcolor=${text_color}:\
-box=1:boxcolor=${box_color}:boxborderw=10"
+line_spacing=8:box=1:boxcolor=${box_color}:boxborderw=10"
 
-vf_time=""
-if [[ "${OFFLINE_SHOW_TIME}" == "1" ]]; then
-  vf_time=",drawtext=fontfile=${font_file}:text=%{localtime\\:%Y-%m-%d %H\\:%M\\:%S}:\
-x=${margin}:y=${time_y}:fontsize=${text_size}:fontcolor=${text_color}:\
-box=1:boxcolor=${box_color}:boxborderw=10"
-fi
-
-vf="${vf_common},${vf_text}${vf_time}"
+vf="${vf_common},${vf_text}"
 
 video_args=()
 x264_extra=()

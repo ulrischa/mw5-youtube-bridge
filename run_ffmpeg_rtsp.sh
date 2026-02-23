@@ -21,7 +21,6 @@ fi
 
 exec "${FFMPEG_BIN}" \
   -nostdin \
-  -rw_timeout "${RW_TIMEOUT_US}" \
   -stimeout "${STIMEOUT_US}" \
   -rtsp_transport tcp \
   -i "${RTSP_URL}" \

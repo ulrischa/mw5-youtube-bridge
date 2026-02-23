@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Interactive installer: installs deps, creates user, writes config files,
-# sets safe permissions, installs ONE cron file.
-
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Please run as root: sudo ./install.sh"
   exit 1
@@ -18,15 +15,12 @@ echo "Installing dependencies..."
 apt update
 apt install -y ffmpeg cron util-linux coreutils fonts-dejavu-core
 
-# Ensure cron is running (service name differs)
 systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now cron.service >/dev/null 2>&1 || true
 
-# Create locked system user
 if ! id -u mw5stream >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin mw5stream
 fi
 
-# Defaults
 cam_ip_default="192.168.1.50"
 yt_url_default="rtmps://a.rtmps.youtube.com/live2"
 fps_default="30"
@@ -71,7 +65,6 @@ vbitrate="${vbitrate:-${vbitrate_default}}"
 read -r -p "Audio bitrate (e.g. 128k) [${abitrate_default}]: " abitrate
 abitrate="${abitrate:-${abitrate_default}}"
 
-# VBUFSIZE ≈ 2x VBITRATE if it ends with k/M
 vbufsize="6000k"
 if [[ "${vbitrate}" =~ ^([0-9]+)([kKmM])$ ]]; then
   num="${BASH_REMATCH[1]}"
@@ -100,7 +93,6 @@ done
 
 read -r -p "Start time (HH:MM) [${start_default}]: " start_time
 start_time="${start_time:-${start_default}}"
-
 read -r -p "Stop time (HH:MM) [${stop_default}]: " stop_time
 stop_time="${stop_time:-${stop_default}}"
 
@@ -123,7 +115,6 @@ if ! [[ "${offline_show_time}" =~ ^[01]$ ]]; then
   exit 1
 fi
 
-# Detect encoder availability; fallback to libx264 if needed
 video_encoder="h264_v4l2m2m"
 if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q "h264_v4l2m2m"; then
   video_encoder="libx264"
@@ -138,29 +129,38 @@ echo "Writing ${CONFIG_FILE} and ${SCHEDULE_FILE} ..."
   printf 'FFMPEG_BIN=%q\n' "ffmpeg"
   printf 'FFPROBE_BIN=%q\n' "ffprobe"
   printf 'TIMEOUT_BIN=%q\n' "timeout"
+
   printf 'CAM_IP=%q\n' "${cam_ip}"
+
   printf 'YT_URL=%q\n' "${yt_url}"
   printf 'YT_KEY=%q\n' "${yt_key}"
+
   printf 'OUT_WIDTH=%q\n' "1280"
   printf 'OUT_HEIGHT=%q\n' "720"
+
   printf 'FPS=%q\n' "${fps}"
   printf 'GOP=%q\n' "${gop}"
   printf 'VBITRATE=%q\n' "${vbitrate}"
   printf 'VBUFSIZE=%q\n' "${vbufsize}"
   printf 'ABITRATE=%q\n' "${abitrate}"
+
   printf 'VIDEO_ENCODER=%q\n' "${video_encoder}"
   printf 'X264_PRESET=%q\n' "veryfast"
   printf 'X264_TUNE=%q\n' "zerolatency"
-  printf 'RW_TIMEOUT_US=%q\n' "15000000"
+
+  # RTSP socket timeout (microseconds). rw_timeout is not used due to ffmpeg 4.1 compatibility.
   printf 'STIMEOUT_US=%q\n' "15000000"
+
   printf 'PROBE_TIMEOUT_SEC=%q\n' "5"
   printf 'PROBE_STIMEOUT_US=%q\n' "5000000"
   printf 'PROBE_RETRIES=%q\n' "3"
   printf 'PROBE_DELAY_SEC=%q\n' "2"
+
   printf 'SNAPSHOT_INTERVAL_SEC=%q\n' "300"
   printf 'SNAPSHOT_TIMEOUT_SEC=%q\n' "8"
   printf 'SNAPSHOT_RETRIES=%q\n' "2"
   printf 'SNAPSHOT_DELAY_SEC=%q\n' "2"
+
   printf 'OFFLINE_TEXT=%q\n' "${offline_text}"
   printf 'OFFLINE_SHOW_TIME=%q\n' "${offline_show_time}"
   printf 'OFFLINE_TEXT_SIZE=%q\n' "36"

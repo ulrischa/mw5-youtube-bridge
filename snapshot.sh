@@ -15,10 +15,8 @@ source "${CONFIG_FILE}"
 RTSP_URL="rtsp://${CAM_IP}:554/stream=1"
 
 try_once() {
-  # Capture one frame quickly and atomically replace last.jpg.
   "${TIMEOUT_BIN}" "${SNAPSHOT_TIMEOUT_SEC}" "${FFMPEG_BIN}" \
     -nostdin \
-    -rw_timeout "${RW_TIMEOUT_US}" \
     -stimeout "${STIMEOUT_US}" \
     -rtsp_transport tcp \
     -i "${RTSP_URL}" \
