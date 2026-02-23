@@ -20,14 +20,12 @@ text_color="${OFFLINE_TEXT_COLOR}"
 text_size="${OFFLINE_TEXT_SIZE}"
 font_file="${FONT_FILE}"
 
-# Place block near bottom-left. Assume up to 2 lines in the file.
 text_y="h-${margin}-${text_size}*3"
 
 vf_common="scale=${OUT_WIDTH}:${OUT_HEIGHT}:force_original_aspect_ratio=decrease,\
 pad=${OUT_WIDTH}:${OUT_HEIGHT}:(ow-iw)/2:(oh-ih)/2,\
 format=yuv420p"
 
-# Single drawtext using textfile only (multiline supported via newline in the file).
 vf_text="drawtext=fontfile=${font_file}:textfile=${TEXT_FILE}:reload=1:\
 x=${margin}:y=${text_y}:fontsize=${text_size}:fontcolor=${text_color}:\
 line_spacing=8:box=1:boxcolor=${box_color}:boxborderw=10"
@@ -47,6 +45,7 @@ fi
 if [[ -s "${LAST_JPG}" ]]; then
   exec "${FFMPEG_BIN}" \
     -nostdin \
+    -re \
     -loop 1 -framerate "${FPS}" -i "${LAST_JPG}" \
     -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=44100" \
     -vf "${vf}" \
@@ -58,6 +57,7 @@ if [[ -s "${LAST_JPG}" ]]; then
 else
   exec "${FFMPEG_BIN}" \
     -nostdin \
+    -re \
     -f lavfi -i "color=c=black:s=${OUT_WIDTH}x${OUT_HEIGHT}:r=${FPS}" \
     -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=44100" \
     -vf "${vf}" \
