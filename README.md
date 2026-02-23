@@ -25,7 +25,8 @@ Scheduling is enforced by cron (every minute):
 
 ## Install (interactive)
 1) Put this folder at /opt/mw5-youtube-bridge (recommended).
-2) Run:
+2) Check rights
+3) Run:
    sudo /opt/mw5-youtube-bridge/install.sh
 
 The installer writes:
