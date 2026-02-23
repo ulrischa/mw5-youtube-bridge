@@ -31,7 +31,7 @@ sudo apt install -y git
 sudo git clone https://github.com/ulrischa/mw5-youtube-bridge
 cd /opt/mw5-youtube-bridge
 sudo ./install.sh
-2) Check correct rights
+2) set rights (chmod +x ./*.sh)
 3) Run:
    sudo /opt/mw5-youtube-bridge/install.sh
 
