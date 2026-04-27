@@ -1,0 +1,9 @@
+config.env
+schedule.conf
+logs/
+run/
+state/
+*.log
+*.pid
+last.jpg
+*.tmp.jpg
